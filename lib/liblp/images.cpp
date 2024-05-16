@@ -123,13 +123,46 @@ bool WriteToImageFile(borrowed_fd fd, const LpMetadata& input) {
     return true;
 }
 
-bool WriteToImageFile(const std::string& file, const LpMetadata& input) {
-    unique_fd fd(open(file.c_str(), O_CREAT | O_RDWR | O_TRUNC | O_CLOEXEC, 0644));
-    if (fd < 0) {
-        PERROR << __PRETTY_FUNCTION__ << " open failed: " << file;
+#if !defined(_WIN32)
+bool FsyncDirectory(const char* dirname) {
+    android::base::unique_fd fd(TEMP_FAILURE_RETRY(open(dirname, O_RDONLY | O_CLOEXEC)));
+    if (fd == -1) {
+        PLOG(ERROR) << "Failed to open " << dirname;
         return false;
     }
-    return WriteToImageFile(fd, input);
+    if (fsync(fd) == -1) {
+        if (errno == EROFS || errno == EINVAL) {
+            PLOG(WARNING) << "Skip fsync " << dirname
+                          << " on a file system does not support synchronization";
+        } else {
+            PLOG(ERROR) << "Failed to fsync " << dirname;
+            return false;
+        }
+    }
+    return true;
+}
+#endif
+
+bool WriteToImageFile(const std::string& file, const LpMetadata& input) {
+    const auto parent_dir = base::Dirname(file);
+    TemporaryFile tmpfile(parent_dir);
+    if (!WriteToImageFile(tmpfile.fd, input)) {
+        PLOG(ERROR) << "Failed to write geometry data to tmpfile " << tmpfile.path;
+        return false;
+    }
+
+#if !defined(_WIN32)
+    fsync(tmpfile.fd);
+#endif
+    const auto err = rename(tmpfile.path, file.c_str());
+    if (err != 0) {
+        PLOG(ERROR) << "Failed to rename tmp geometry file " << tmpfile.path << " to " << file;
+        return false;
+    }
+#if !defined(_WIN32)
+    FsyncDirectory(parent_dir.c_str());
+#endif
+    return true;
 }
 
 ImageBuilder::ImageBuilder(const LpMetadata& metadata, uint32_t block_size,
@@ -184,7 +217,7 @@ bool ImageBuilder::IsValid() const {
 }
 
 bool ImageBuilder::Export(const std::string& file) {
-    unique_fd fd(open(file.c_str(), O_CREAT | O_RDWR | O_TRUNC | O_CLOEXEC, 0644));
+    unique_fd fd(open(file.c_str(), O_CREAT | O_RDWR | O_TRUNC | O_CLOEXEC | O_BINARY, 0644));
     if (fd < 0) {
         PERROR << "open failed: " << file;
         return false;
@@ -208,7 +241,8 @@ bool ImageBuilder::ExportFiles(const std::string& output_dir) {
         std::string file_name = "super_" + name + ".img";
         std::string file_path = output_dir + "/" + file_name;
 
-        static const int kOpenFlags = O_CREAT | O_RDWR | O_TRUNC | O_CLOEXEC | O_NOFOLLOW;
+        static const int kOpenFlags =
+                O_CREAT | O_RDWR | O_TRUNC | O_CLOEXEC | O_NOFOLLOW | O_BINARY;
         unique_fd fd(open(file_path.c_str(), kOpenFlags, 0644));
         if (fd < 0) {
             PERROR << "open failed: " << file_path;
@@ -312,6 +346,11 @@ static inline bool HasFillValue(uint32_t* buffer, size_t count) {
 
 bool ImageBuilder::AddPartitionImage(const LpMetadataPartition& partition,
                                      const std::string& file) {
+    if (partition.num_extents == 0) {
+        LERROR << "Partition size is zero: " << GetPartitionName(partition);
+        return false;
+    }
+
     // Track which extent we're processing.
     uint32_t extent_index = partition.first_extent_index;
 
@@ -443,7 +482,7 @@ bool ImageBuilder::CheckExtentOrdering() {
 }
 
 int ImageBuilder::OpenImageFile(const std::string& file) {
-    android::base::unique_fd source_fd = GetControlFileOrOpen(file.c_str(), O_RDONLY | O_CLOEXEC);
+    unique_fd source_fd = GetControlFileOrOpen(file.c_str(), O_RDONLY | O_CLOEXEC | O_BINARY);
     if (source_fd < 0) {
         PERROR << "open image file failed: " << file;
         return -1;

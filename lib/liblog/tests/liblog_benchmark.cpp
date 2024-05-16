@@ -18,6 +18,7 @@
 #include <inttypes.h>
 #include <poll.h>
 #include <sched.h>
+#include <signal.h>
 #include <sys/socket.h>
 #include <sys/syscall.h>
 #include <sys/types.h>
@@ -27,10 +28,16 @@
 #include <unordered_set>
 
 #include <android-base/file.h>
+#include <android-base/properties.h>
 #include <benchmark/benchmark.h>
 #include <cutils/sockets.h>
 #include <log/event_tag_map.h>
+#include <log/log_read.h>
 #include <private/android_logger.h>
+
+#include "test_utils.h"
+
+size_t convertPrintable(char*, const char*, size_t);
 
 BENCHMARK_MAIN();
 
@@ -182,7 +189,7 @@ static void BM_pmsg_short(benchmark::State& state) {
    */
 
   struct timespec ts;
-  clock_gettime(android_log_clockid(), &ts);
+  clock_gettime(CLOCK_REALTIME, &ts);
 
   android_pmsg_log_header_t pmsg_header;
   pmsg_header.magic = LOGGER_MAGIC;
@@ -192,7 +199,7 @@ static void BM_pmsg_short(benchmark::State& state) {
   pmsg_header.pid = getpid();
 
   android_log_header_t header;
-  header.tid = gettid();
+  header.tid = 0;
   header.realtime.tv_sec = ts.tv_sec;
   header.realtime.tv_nsec = ts.tv_nsec;
 
@@ -258,15 +265,14 @@ static void BM_pmsg_short_aligned(benchmark::State& state) {
    */
 
   struct timespec ts;
-  clock_gettime(android_log_clockid(), &ts);
+  clock_gettime(CLOCK_REALTIME, &ts);
 
   struct packet {
     android_pmsg_log_header_t pmsg_header;
     android_log_header_t header;
     android_log_event_int_t payload;
   };
-  alignas(8) char buf[sizeof(struct packet) + 8];
-  memset(buf, 0, sizeof(buf));
+  alignas(8) char buf[sizeof(struct packet) + 8] = {};
   struct packet* buffer = (struct packet*)(((uintptr_t)buf + 7) & ~7);
   if (((uintptr_t)&buffer->pmsg_header) & 7) {
     fprintf(stderr, "&buffer=0x%p iterations=%" PRIu64 "\n", &buffer->pmsg_header,
@@ -279,7 +285,7 @@ static void BM_pmsg_short_aligned(benchmark::State& state) {
   buffer->pmsg_header.uid = getuid();
   buffer->pmsg_header.pid = getpid();
 
-  buffer->header.tid = gettid();
+  buffer->header.tid = 0;
   buffer->header.realtime.tv_sec = ts.tv_sec;
   buffer->header.realtime.tv_nsec = ts.tv_nsec;
 
@@ -333,15 +339,14 @@ static void BM_pmsg_short_unaligned1(benchmark::State& state) {
    */
 
   struct timespec ts;
-  clock_gettime(android_log_clockid(), &ts);
+  clock_gettime(CLOCK_REALTIME, &ts);
 
   struct packet {
     android_pmsg_log_header_t pmsg_header;
     android_log_header_t header;
     android_log_event_int_t payload;
   };
-  alignas(8) char buf[sizeof(struct packet) + 8];
-  memset(buf, 0, sizeof(buf));
+  alignas(8) char buf[sizeof(struct packet) + 8] = {};
   struct packet* buffer = (struct packet*)((((uintptr_t)buf + 7) & ~7) + 1);
   if ((((uintptr_t)&buffer->pmsg_header) & 7) != 1) {
     fprintf(stderr, "&buffer=0x%p iterations=%" PRIu64 "\n", &buffer->pmsg_header,
@@ -354,7 +359,7 @@ static void BM_pmsg_short_unaligned1(benchmark::State& state) {
   buffer->pmsg_header.uid = getuid();
   buffer->pmsg_header.pid = getpid();
 
-  buffer->header.tid = gettid();
+  buffer->header.tid = 0;
   buffer->header.realtime.tv_sec = ts.tv_sec;
   buffer->header.realtime.tv_nsec = ts.tv_nsec;
 
@@ -408,15 +413,14 @@ static void BM_pmsg_long_aligned(benchmark::State& state) {
    */
 
   struct timespec ts;
-  clock_gettime(android_log_clockid(), &ts);
+  clock_gettime(CLOCK_REALTIME, &ts);
 
   struct packet {
     android_pmsg_log_header_t pmsg_header;
     android_log_header_t header;
     android_log_event_int_t payload;
   };
-  alignas(8) char buf[sizeof(struct packet) + 8 + LOGGER_ENTRY_MAX_PAYLOAD];
-  memset(buf, 0, sizeof(buf));
+  alignas(8) char buf[sizeof(struct packet) + 8 + LOGGER_ENTRY_MAX_PAYLOAD] = {};
   struct packet* buffer = (struct packet*)(((uintptr_t)buf + 7) & ~7);
   if (((uintptr_t)&buffer->pmsg_header) & 7) {
     fprintf(stderr, "&buffer=0x%p iterations=%" PRIu64 "\n", &buffer->pmsg_header,
@@ -429,7 +433,7 @@ static void BM_pmsg_long_aligned(benchmark::State& state) {
   buffer->pmsg_header.uid = getuid();
   buffer->pmsg_header.pid = getpid();
 
-  buffer->header.tid = gettid();
+  buffer->header.tid = 0;
   buffer->header.realtime.tv_sec = ts.tv_sec;
   buffer->header.realtime.tv_nsec = ts.tv_nsec;
 
@@ -481,15 +485,14 @@ static void BM_pmsg_long_unaligned1(benchmark::State& state) {
    */
 
   struct timespec ts;
-  clock_gettime(android_log_clockid(), &ts);
+  clock_gettime(CLOCK_REALTIME, &ts);
 
   struct packet {
     android_pmsg_log_header_t pmsg_header;
     android_log_header_t header;
     android_log_event_int_t payload;
   };
-  alignas(8) char buf[sizeof(struct packet) + 8 + LOGGER_ENTRY_MAX_PAYLOAD];
-  memset(buf, 0, sizeof(buf));
+  alignas(8) char buf[sizeof(struct packet) + 8 + LOGGER_ENTRY_MAX_PAYLOAD] = {};
   struct packet* buffer = (struct packet*)((((uintptr_t)buf + 7) & ~7) + 1);
   if ((((uintptr_t)&buffer->pmsg_header) & 7) != 1) {
     fprintf(stderr, "&buffer=0x%p iterations=%" PRIu64 "\n", &buffer->pmsg_header,
@@ -502,7 +505,7 @@ static void BM_pmsg_long_unaligned1(benchmark::State& state) {
   buffer->pmsg_header.uid = getuid();
   buffer->pmsg_header.pid = getpid();
 
-  buffer->header.tid = gettid();
+  buffer->header.tid = 0;
   buffer->header.realtime.tv_sec = ts.tv_sec;
   buffer->header.realtime.tv_nsec = ts.tv_nsec;
 
@@ -592,8 +595,8 @@ static void BM_log_event_overhead_42(benchmark::State& state) {
     // In system/core/logcat/event.logtags:
     // # These are used for testing, do not modify without updating
     // # tests/framework-tests/src/android/util/EventLogFunctionalTest.java.
-    // # system/core/liblog/tests/liblog_benchmark.cpp
-    // # system/core/liblog/tests/liblog_test.cpp
+    // # system/logging/liblog/tests/liblog_benchmark.cpp
+    // # system/logging/liblog/tests/liblog_test.cpp
     // 42    answer (to life the universe etc|3)
     __android_log_btwrite(42, EVENT_TYPE_LONG, &i, sizeof(i));
     state.PauseTiming();
@@ -635,7 +638,7 @@ static unsigned long long caught_convert(char* cp) {
   return l;
 }
 
-static const int alarm_time = 3;
+static const int alarm_time = getAlarmSeconds(3);
 
 /*
  *	Measure the time it takes for the logd posting call to acquire the
@@ -647,8 +650,7 @@ static const int alarm_time = 3;
 static void BM_log_latency(benchmark::State& state) {
   pid_t pid = getpid();
 
-  struct logger_list* logger_list =
-      android_logger_list_open(LOG_ID_EVENTS, ANDROID_LOG_RDONLY, 0, pid);
+  struct logger_list* logger_list = android_logger_list_open(LOG_ID_EVENTS, 0, 0, pid);
 
   if (!logger_list) {
     fprintf(stderr, "Unable to open events log: %s\n", strerror(errno));
@@ -658,7 +660,7 @@ static void BM_log_latency(benchmark::State& state) {
   signal(SIGALRM, caught_latency);
   alarm(alarm_time);
 
-  for (size_t j = 0; state.KeepRunning() && j < 10 * state.iterations(); ++j) {
+  for (int64_t j = 0; state.KeepRunning() && j < 10 * state.iterations(); ++j) {
   retry:  // We allow transitory errors (logd overloaded) to be retried.
     log_time ts;
     LOG_FAILURE_RETRY((ts = log_time(CLOCK_REALTIME),
@@ -683,8 +685,8 @@ static void BM_log_latency(benchmark::State& state) {
       if (!eventData || (eventData[4] != EVENT_TYPE_LONG)) {
         continue;
       }
-      log_time tx(eventData + 4 + 1);
-      if (ts != tx) {
+      log_time* tx = reinterpret_cast<log_time*>(eventData + 4 + 1);
+      if (ts != *tx) {
         if (0xDEADBEEFA55A5AA5ULL == caught_convert(eventData + 4 + 1)) {
           state.SkipWithError("signal");
           break;
@@ -722,8 +724,7 @@ static void caught_delay(int /*signum*/) {
 static void BM_log_delay(benchmark::State& state) {
   pid_t pid = getpid();
 
-  struct logger_list* logger_list =
-      android_logger_list_open(LOG_ID_EVENTS, ANDROID_LOG_RDONLY, 0, pid);
+  struct logger_list* logger_list = android_logger_list_open(LOG_ID_EVENTS, 0, 0, pid);
 
   if (!logger_list) {
     fprintf(stderr, "Unable to open events log: %s\n", strerror(errno));
@@ -757,8 +758,8 @@ static void BM_log_delay(benchmark::State& state) {
       if (!eventData || (eventData[4] != EVENT_TYPE_LONG)) {
         continue;
       }
-      log_time tx(eventData + 4 + 1);
-      if (ts != tx) {
+      log_time* tx = reinterpret_cast<log_time*>(eventData + 4 + 1);
+      if (ts != *tx) {
         if (0xDEADBEEFA55A5AA6ULL == caught_convert(eventData + 4 + 1)) {
           state.SkipWithError("signal");
           break;
@@ -791,19 +792,6 @@ static void BM_is_loggable(benchmark::State& state) {
 }
 BENCHMARK(BM_is_loggable);
 
-/*
- *	Measure the time it takes for android_log_clockid.
- */
-static void BM_clockid(benchmark::State& state) {
-  while (state.KeepRunning()) {
-    android_log_clockid();
-  }
-}
-BENCHMARK(BM_clockid);
-
-/*
- *	Measure the time it takes for __android_log_security.
- */
 static void BM_security(benchmark::State& state) {
   while (state.KeepRunning()) {
     __android_log_security();
@@ -889,30 +877,6 @@ static void BM_lookupEventFormat(benchmark::State& state) {
 }
 BENCHMARK(BM_lookupEventFormat);
 
-/*
- *	Measure the time it takes for android_lookupEventTagNum plus above
- */
-static void BM_lookupEventTagNum(benchmark::State& state) {
-  prechargeEventMap();
-
-  std::unordered_set<uint32_t>::const_iterator it = set.begin();
-
-  while (state.KeepRunning()) {
-    size_t len;
-    const char* name = android_lookupEventTag_len(map, &len, (*it));
-    std::string Name(name, len);
-    const char* format = android_lookupEventFormat_len(map, &len, (*it));
-    std::string Format(format, len);
-    state.ResumeTiming();
-    android_lookupEventTagNum(map, Name.c_str(), Format.c_str(),
-                              ANDROID_LOG_UNKNOWN);
-    state.PauseTiming();
-    ++it;
-    if (it == set.end()) it = set.begin();
-  }
-}
-BENCHMARK(BM_lookupEventTagNum);
-
 // Must be functionally identical to liblog internal SendLogdControlMessage()
 static void send_to_control(char* buf, size_t len) {
   int sock =
@@ -926,7 +890,7 @@ static void send_to_control(char* buf, size_t len) {
     return;
   }
   while ((ret = read(sock, buf, len)) > 0) {
-    if (((size_t)ret == len) || (len < PAGE_SIZE)) {
+    if ((size_t)ret == len) {
       break;
     }
     len -= ret;
@@ -965,8 +929,7 @@ static void BM_lookupEventTagNum_logd_new(benchmark::State& state) {
   }
 
   while (state.KeepRunning()) {
-    char buffer[256];
-    memset(buffer, 0, sizeof(buffer));
+    char buffer[256] = {};
     log_time now(CLOCK_MONOTONIC);
     char name[64];
     snprintf(name, sizeof(name), "a%" PRIu64, now.nsec());
@@ -1025,3 +988,44 @@ static void BM_lookupEventTagNum_logd_existing(benchmark::State& state) {
   }
 }
 BENCHMARK(BM_lookupEventTagNum_logd_existing);
+
+static void BM_log_verbose_overhead(benchmark::State& state) {
+  std::string test_log_tag = "liblog_verbose_tag";
+  android::base::SetProperty("log.tag." + test_log_tag, "I");
+  for (auto _ : state) {
+    __android_log_print(ANDROID_LOG_VERBOSE, test_log_tag.c_str(), "%s test log message %d %d",
+                        "test test", 123, 456);
+  }
+  android::base::SetProperty("log.tag." + test_log_tag, "");
+}
+BENCHMARK(BM_log_verbose_overhead);
+
+static void BM_log_convertPrintable_ascii(benchmark::State& state) {
+  char buf[BUFSIZ];
+  const char* s = "hello, world! this is a plain ASCII string 1234.";
+  size_t n = strlen(s);
+  for (auto _ : state) {
+    convertPrintable(buf, s, n);
+  }
+}
+BENCHMARK(BM_log_convertPrintable_ascii);
+
+static void BM_log_convertPrintable_non_printable(benchmark::State& state) {
+  char buf[BUFSIZ];
+  const char* s = "hello,\x01world!\x02this is a plain ASCII string 1234\x7f";
+  size_t n = strlen(s);
+  for (auto _ : state) {
+    convertPrintable(buf, s, n);
+  }
+}
+BENCHMARK(BM_log_convertPrintable_non_printable);
+
+static void BM_log_convertPrintable_non_ascii(benchmark::State& state) {
+  char buf[BUFSIZ];
+  const char* s = "동해 물과 백두산이 마르고 닳도록, 하느님이 보우하사 우리나라 만세.";
+  size_t n = strlen(s);
+  for (auto _ : state) {
+    convertPrintable(buf, s, n);
+  }
+}
+BENCHMARK(BM_log_convertPrintable_non_ascii);

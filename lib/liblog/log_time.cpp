@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#define _POSIX_THREAD_SAFE_FUNCTIONS  // For mingw localtime_r().
+
 #include <ctype.h>
 #include <limits.h>
 #include <stdio.h>
@@ -21,11 +23,7 @@
 
 #include <private/android_logger.h>
 
-const char log_time::default_format[] = "%m-%d %H:%M:%S.%q";
-const timespec log_time::EPOCH = {0, 0};
-
 // Add %#q for fractional seconds to standard strptime function
-
 char* log_time::strptime(const char* s, const char* format) {
   time_t now;
 #ifdef __linux__
@@ -37,13 +35,8 @@ char* log_time::strptime(const char* s, const char* format) {
   tv_nsec = 0;
 #endif
 
-  struct tm* ptm;
-#if !defined(_WIN32)
   struct tm tmBuf;
-  ptm = localtime_r(&now, &tmBuf);
-#else
-  ptm = localtime(&now);
-#endif
+  struct tm* ptm = localtime_r(&now, &tmBuf);
 
   char fmt[strlen(format) + 1];
   strcpy(fmt, format);
@@ -77,11 +70,7 @@ char* log_time::strptime(const char* s, const char* format) {
         ++ret;
       }
       now = tv_sec;
-#if !defined(_WIN32)
       ptm = localtime_r(&now, &tmBuf);
-#else
-      ptm = localtime(&now);
-#endif
     } else
 #endif
     {
@@ -130,60 +119,4 @@ char* log_time::strptime(const char* s, const char* format) {
   tv_nsec = 0;
 #endif
   return ret;
-}
-
-log_time log_time::operator-=(const timespec& T) {
-  // No concept of negative time, clamp to EPOCH
-  if (*this <= T) {
-    return *this = log_time(EPOCH);
-  }
-
-  if (this->tv_nsec < (unsigned long int)T.tv_nsec) {
-    --this->tv_sec;
-    this->tv_nsec = NS_PER_SEC + this->tv_nsec - T.tv_nsec;
-  } else {
-    this->tv_nsec -= T.tv_nsec;
-  }
-  this->tv_sec -= T.tv_sec;
-
-  return *this;
-}
-
-log_time log_time::operator+=(const timespec& T) {
-  this->tv_nsec += (unsigned long int)T.tv_nsec;
-  if (this->tv_nsec >= NS_PER_SEC) {
-    this->tv_nsec -= NS_PER_SEC;
-    ++this->tv_sec;
-  }
-  this->tv_sec += T.tv_sec;
-
-  return *this;
-}
-
-log_time log_time::operator-=(const log_time& T) {
-  // No concept of negative time, clamp to EPOCH
-  if (*this <= T) {
-    return *this = log_time(EPOCH);
-  }
-
-  if (this->tv_nsec < T.tv_nsec) {
-    --this->tv_sec;
-    this->tv_nsec = NS_PER_SEC + this->tv_nsec - T.tv_nsec;
-  } else {
-    this->tv_nsec -= T.tv_nsec;
-  }
-  this->tv_sec -= T.tv_sec;
-
-  return *this;
-}
-
-log_time log_time::operator+=(const log_time& T) {
-  this->tv_nsec += T.tv_nsec;
-  if (this->tv_nsec >= NS_PER_SEC) {
-    this->tv_nsec -= NS_PER_SEC;
-    ++this->tv_sec;
-  }
-  this->tv_sec += T.tv_sec;
-
-  return *this;
 }

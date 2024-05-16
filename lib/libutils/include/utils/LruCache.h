@@ -84,13 +84,13 @@ private:
         const TKey& getKey() const final { return key; }
     };
 
-    struct HashForEntry : public std::unary_function<KeyedEntry*, hash_t> {
+    struct HashForEntry {
         size_t operator() (const KeyedEntry* entry) const {
             return hash_type(entry->getKey());
         };
     };
 
-    struct EqualityForHashedEntries : public std::unary_function<KeyedEntry*, hash_t> {
+    struct EqualityForHashedEntries {
         bool operator() (const KeyedEntry* lhs, const KeyedEntry* rhs) const {
             return lhs->getKey() == rhs->getKey();
         };
@@ -161,12 +161,12 @@ public:
 // Implementation is here, because it's fully templated
 template <typename TKey, typename TValue>
 LruCache<TKey, TValue>::LruCache(uint32_t maxCapacity)
-    : mSet(new LruCacheSet())
-    , mListener(nullptr)
-    , mOldest(nullptr)
-    , mYoungest(nullptr)
-    , mMaxCapacity(maxCapacity)
-    , mNullValue(0) {
+    : mSet(new LruCacheSet()),
+      mListener(nullptr),
+      mOldest(nullptr),
+      mYoungest(nullptr),
+      mMaxCapacity(maxCapacity),
+      mNullValue{} {
     mSet->max_load_factor(1.0);
 };
 

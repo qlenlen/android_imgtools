@@ -1,0 +1,4 @@
+bin/*
+lib/lib/*
+
+.vscode/settings.json

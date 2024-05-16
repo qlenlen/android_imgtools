@@ -35,15 +35,11 @@
 #include <string>
 
 #include <android-base/strings.h>
+#include <cutils/fs.h>
 #include <log/log.h>
 #include <private/android_filesystem_config.h>
-#include <utils/Compat.h>
 
 #include "fs_config.h"
-
-#ifndef O_BINARY
-#define O_BINARY 0
-#endif
 
 using android::base::EndsWith;
 using android::base::StartsWith;
@@ -80,16 +76,20 @@ static const struct fs_path_config android_dirs[] = {
     { 00771, AID_SYSTEM,       AID_SYSTEM,       0, "data" },
     { 00755, AID_ROOT,         AID_SYSTEM,       0, "mnt" },
     { 00751, AID_ROOT,         AID_SHELL,        0, "product/bin" },
+    { 00751, AID_ROOT,         AID_SHELL,        0, "product/apex/*/bin" },
     { 00777, AID_ROOT,         AID_ROOT,         0, "sdcard" },
     { 00751, AID_ROOT,         AID_SDCARD_R,     0, "storage" },
+    { 00750, AID_ROOT,         AID_SYSTEM,       0, "system/apex/com.android.tethering/bin/for-system" },
     { 00751, AID_ROOT,         AID_SHELL,        0, "system/bin" },
     { 00755, AID_ROOT,         AID_ROOT,         0, "system/etc/ppp" },
     { 00755, AID_ROOT,         AID_SHELL,        0, "system/vendor" },
-    { 00751, AID_ROOT,         AID_SHELL,        0, "system/xbin" },
+    { 00750, AID_ROOT,         AID_SHELL,        0, "system/xbin" },
     { 00751, AID_ROOT,         AID_SHELL,        0, "system/apex/*/bin" },
+    { 00750, AID_ROOT,         AID_SYSTEM,       0, "system_ext/apex/com.android.tethering/bin/for-system" },
     { 00751, AID_ROOT,         AID_SHELL,        0, "system_ext/bin" },
     { 00751, AID_ROOT,         AID_SHELL,        0, "system_ext/apex/*/bin" },
     { 00751, AID_ROOT,         AID_SHELL,        0, "vendor/bin" },
+    { 00751, AID_ROOT,         AID_SHELL,        0, "vendor/apex/*/bin" },
     { 00755, AID_ROOT,         AID_SHELL,        0, "vendor" },
     { 00755, AID_ROOT,         AID_ROOT,         0, 0 },
         // clang-format on
@@ -192,6 +192,8 @@ static const struct fs_path_config android_files[] = {
 
     // the following files have enhanced capabilities and ARE included
     // in user builds.
+    { 06755, AID_CLAT,      AID_CLAT,      0, "system/apex/com.android.tethering/bin/for-system/clatd" },
+    { 06755, AID_CLAT,      AID_CLAT,      0, "system_ext/apex/com.android.tethering/bin/for-system/clatd" },
     { 00700, AID_SYSTEM,    AID_SHELL,     CAP_MASK_LONG(CAP_BLOCK_SUSPEND),
                                               "system/bin/inputflinger" },
     { 00750, AID_ROOT,      AID_SHELL,     CAP_MASK_LONG(CAP_SETUID) |
@@ -201,20 +203,30 @@ static const struct fs_path_config android_files[] = {
                                            CAP_MASK_LONG(CAP_SETGID),
                                               "system/bin/simpleperf_app_runner" },
     { 00755, AID_ROOT,      AID_ROOT,      0, "first_stage_ramdisk/system/bin/e2fsck" },
-    { 00755, AID_ROOT,      AID_ROOT,      0, "first_stage_ramdisk/system/bin/tune2fs" },
+#ifdef __LP64__
+    { 00755, AID_ROOT,      AID_ROOT,      0, "first_stage_ramdisk/system/bin/linker64" },
+#else
+    { 00755, AID_ROOT,      AID_ROOT,      0, "first_stage_ramdisk/system/bin/linker" },
+#endif
     { 00755, AID_ROOT,      AID_ROOT,      0, "first_stage_ramdisk/system/bin/resize2fs" },
+    { 00755, AID_ROOT,      AID_ROOT,      0, "first_stage_ramdisk/system/bin/snapuserd" },
+    { 00755, AID_ROOT,      AID_ROOT,      0, "first_stage_ramdisk/system/bin/snapuserd_ramdisk" },
+    { 00755, AID_ROOT,      AID_ROOT,      0, "first_stage_ramdisk/system/bin/tune2fs" },
+    { 00755, AID_ROOT,      AID_ROOT,      0, "first_stage_ramdisk/system/bin/fsck.f2fs" },
     // generic defaults
     { 00755, AID_ROOT,      AID_ROOT,      0, "bin/*" },
     { 00640, AID_ROOT,      AID_SHELL,     0, "fstab.*" },
     { 00750, AID_ROOT,      AID_SHELL,     0, "init*" },
     { 00755, AID_ROOT,      AID_SHELL,     0, "odm/bin/*" },
     { 00755, AID_ROOT,      AID_SHELL,     0, "product/bin/*" },
+    { 00755, AID_ROOT,      AID_SHELL,     0, "product/apex/*bin/*" },
     { 00755, AID_ROOT,      AID_SHELL,     0, "system/bin/*" },
     { 00755, AID_ROOT,      AID_SHELL,     0, "system/xbin/*" },
     { 00755, AID_ROOT,      AID_SHELL,     0, "system/apex/*/bin/*" },
     { 00755, AID_ROOT,      AID_SHELL,     0, "system_ext/bin/*" },
     { 00755, AID_ROOT,      AID_SHELL,     0, "system_ext/apex/*/bin/*" },
     { 00755, AID_ROOT,      AID_SHELL,     0, "vendor/bin/*" },
+    { 00755, AID_ROOT,      AID_SHELL,     0, "vendor/apex/*bin/*" },
     { 00755, AID_ROOT,      AID_SHELL,     0, "vendor/xbin/*" },
     { 00644, AID_ROOT,      AID_ROOT,      0, 0 },
         // clang-format on
@@ -241,12 +253,12 @@ static int fs_config_open(int dir, int which, const char* target_out_path) {
         len = strip(target_out_path, len, "/");
         len = strip(target_out_path, len, "/system");
         if (asprintf(&name, "%.*s%s", (int)len, target_out_path, conf[which][dir]) != -1) {
-            fd = TEMP_FAILURE_RETRY(open(name, O_RDONLY | O_BINARY));
+            fd = TEMP_FAILURE_RETRY(open(name, O_RDONLY));
             free(name);
         }
     }
     if (fd < 0) {
-        fd = TEMP_FAILURE_RETRY(open(conf[which][dir], O_RDONLY | O_BINARY));
+        fd = TEMP_FAILURE_RETRY(open(conf[which][dir], O_RDONLY));
     }
     return fd;
 }

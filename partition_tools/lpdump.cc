@@ -29,7 +29,6 @@
 #include <regex>
 #include <string>
 #include <vector>
-#include <filesystem>
 
 #include <android-base/parseint.h>
 #include <android-base/properties.h>
@@ -230,6 +229,13 @@ static bool MergeFsUsage(DynamicPartitionsDeviceInfoProto* proto,
             partition_proto->set_is_dynamic(false);
         }
         partition_proto->set_fs_size((uint64_t)vst.f_blocks * vst.f_frsize);
+
+        if (!entry.fs_type.empty()) {
+            partition_proto->set_fs_type(entry.fs_type);
+        } else {
+            partition_proto->set_fs_type("UNKNOWN");
+        }
+
         if (vst.f_bavail <= vst.f_blocks) {
             partition_proto->set_fs_used((uint64_t)(vst.f_blocks - vst.f_bavail) * vst.f_frsize);
         }
@@ -385,7 +391,7 @@ static std::unique_ptr<LpMetadata> ReadDeviceOrFile(const std::string& path, uin
     if (IsEmptySuperImage(path)) {
         return ReadFromImageFile(path);
     }
-    return ReadMetadata(std::filesystem::absolute(path), slot);
+    return ReadMetadata(path, slot);
 }
 
 int LpdumpMain(int argc, char* argv[], std::ostream& cout, std::ostream& cerr) {

@@ -21,8 +21,9 @@
 
 extern "C++" {
 
+#include <stdlib.h>
+
 #include <algorithm>
-#include <cstdlib>
 #include <type_traits>
 
 BSSL_NAMESPACE_BEGIN
@@ -93,19 +94,16 @@ class SpanBase {
 template <typename T>
 class Span : private internal::SpanBase<const T> {
  private:
+  static const size_t npos = static_cast<size_t>(-1);
+
   // Heuristically test whether C is a container type that can be converted into
   // a Span by checking for data() and size() member functions.
   //
-  // TODO(davidben): Switch everything to std::enable_if_t when we remove
-  // support for MSVC 2015. Although we could write our own enable_if_t and MSVC
-  // 2015 has std::enable_if_t anyway, MSVC 2015's SFINAE implementation is
-  // problematic and does not work below unless we write the ::type at use.
+  // TODO(davidben): Require C++17 support for std::is_convertible_v, etc.
   template <typename C>
-  using EnableIfContainer = std::enable_if<
+  using EnableIfContainer = std::enable_if_t<
       std::is_convertible<decltype(std::declval<C>().data()), T *>::value &&
       std::is_integral<decltype(std::declval<C>().size())>::value>;
-
-  static const size_t npos = static_cast<size_t>(-1);
 
  public:
   constexpr Span() : Span(nullptr, 0) {}
@@ -114,40 +112,39 @@ class Span : private internal::SpanBase<const T> {
   template <size_t N>
   constexpr Span(T (&array)[N]) : Span(array, N) {}
 
-  template <
-      typename C, typename = typename EnableIfContainer<C>::type,
-      typename = typename std::enable_if<std::is_const<T>::value, C>::type>
-  Span(const C &container) : data_(container.data()), size_(container.size()) {}
-
-  template <
-      typename C, typename = typename EnableIfContainer<C>::type,
-      typename = typename std::enable_if<!std::is_const<T>::value, C>::type>
-  explicit Span(C &container)
+  template <typename C, typename = EnableIfContainer<C>,
+            typename = std::enable_if_t<std::is_const<T>::value, C>>
+  constexpr Span(const C &container)
       : data_(container.data()), size_(container.size()) {}
 
-  T *data() const { return data_; }
-  size_t size() const { return size_; }
-  bool empty() const { return size_ == 0; }
+  template <typename C, typename = EnableIfContainer<C>,
+            typename = std::enable_if_t<!std::is_const<T>::value, C>>
+  constexpr explicit Span(C &container)
+      : data_(container.data()), size_(container.size()) {}
 
-  T *begin() const { return data_; }
-  const T *cbegin() const { return data_; }
-  T *end() const { return data_ + size_; }
-  const T *cend() const { return end(); }
+  constexpr T *data() const { return data_; }
+  constexpr size_t size() const { return size_; }
+  constexpr bool empty() const { return size_ == 0; }
 
-  T &front() const {
+  constexpr T *begin() const { return data_; }
+  constexpr const T *cbegin() const { return data_; }
+  constexpr T *end() const { return data_ + size_; }
+  constexpr const T *cend() const { return end(); }
+
+  constexpr T &front() const {
     if (size_ == 0) {
       abort();
     }
     return data_[0];
   }
-  T &back() const {
+  constexpr T &back() const {
     if (size_ == 0) {
       abort();
     }
     return data_[size_ - 1];
   }
 
-  T &operator[](size_t i) const {
+  constexpr T &operator[](size_t i) const {
     if (i >= size_) {
       abort();
     }
@@ -155,11 +152,30 @@ class Span : private internal::SpanBase<const T> {
   }
   T &at(size_t i) const { return (*this)[i]; }
 
-  Span subspan(size_t pos = 0, size_t len = npos) const {
+  constexpr Span subspan(size_t pos = 0, size_t len = npos) const {
     if (pos > size_) {
-      abort();  // absl::Span throws an exception here.
+      // absl::Span throws an exception here. Note std::span and Chromium
+      // base::span additionally forbid pos + len being out of range, with a
+      // special case at npos/dynamic_extent, while absl::Span::subspan clips
+      // the span. For now, we align with absl::Span in case we switch to it in
+      // the future.
+      abort();
     }
     return Span(data_ + pos, std::min(size_ - pos, len));
+  }
+
+  constexpr Span first(size_t len) const {
+    if (len > size_) {
+      abort();
+    }
+    return Span(data_, len);
+  }
+
+  constexpr Span last(size_t len) const {
+    if (len > size_) {
+      abort();
+    }
+    return Span(data_ + size_ - len, len);
   }
 
  private:
@@ -171,23 +187,29 @@ template <typename T>
 const size_t Span<T>::npos;
 
 template <typename T>
-Span<T> MakeSpan(T *ptr, size_t size) {
+constexpr Span<T> MakeSpan(T *ptr, size_t size) {
   return Span<T>(ptr, size);
 }
 
 template <typename C>
-auto MakeSpan(C &c) -> decltype(MakeSpan(c.data(), c.size())) {
+constexpr auto MakeSpan(C &c) -> decltype(MakeSpan(c.data(), c.size())) {
   return MakeSpan(c.data(), c.size());
 }
 
 template <typename T>
-Span<const T> MakeConstSpan(T *ptr, size_t size) {
+constexpr Span<const T> MakeConstSpan(T *ptr, size_t size) {
   return Span<const T>(ptr, size);
 }
 
 template <typename C>
-auto MakeConstSpan(const C &c) -> decltype(MakeConstSpan(c.data(), c.size())) {
+constexpr auto MakeConstSpan(const C &c)
+    -> decltype(MakeConstSpan(c.data(), c.size())) {
   return MakeConstSpan(c.data(), c.size());
+}
+
+template <typename T, size_t size>
+constexpr Span<const T> MakeConstSpan(T (&array)[size]) {
+  return array;
 }
 
 BSSL_NAMESPACE_END

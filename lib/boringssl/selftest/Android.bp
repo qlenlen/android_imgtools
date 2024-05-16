@@ -13,6 +13,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+package {
+    // See: http://go/android-license-faq
+    // A large-scale-change added 'default_applicable_licenses' to import
+    // all of the 'license_kinds' from "external_boringssl_license"
+    // to get the below license kinds:
+    //   SPDX-license-identifier-Apache-2.0
+    default_applicable_licenses: ["external_boringssl_license"],
+}
+
 cc_defaults {
     name: "boringssl_self_test_defaults",
     compile_multilib: "both",
@@ -35,6 +44,7 @@ cc_defaults {
 cc_binary {
     name: "boringssl_self_test",
     visibility: [
+        "//art/build/sdk",
         "//external/conscrypt/apex",
         "//external/conscrypt/apex/testing",
     ],
@@ -52,4 +62,24 @@ cc_binary {
     stem: "boringssl_self_test",
     vendor: true,
     init_rc: ["boringssl_self_test.rc"],
+    required: [
+        "boringssl_self_test.zygote64.rc",
+        "boringssl_self_test.zygote64_32.rc",
+    ],
+}
+
+prebuilt_etc {
+    name: "boringssl_self_test.zygote64_32.rc",
+    src: "boringssl_self_test.zygote64_32.rc",
+    vendor: true,
+    symlinks: [
+        "boringssl_self_test.zygote32.rc",
+        "boringssl_self_test.no_zygote.rc",
+    ],
+}
+
+prebuilt_etc {
+    name: "boringssl_self_test.zygote64.rc",
+    src: "boringssl_self_test.zygote64.rc",
+    vendor: true,
 }

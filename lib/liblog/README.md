@@ -60,8 +60,6 @@ Public Functions and Macros
     LOG_EVENT_INT(tag, value)
     LOG_EVENT_LONG(tag, value)
 
-    clockid_t android_log_clockid()
-
     log_id_t android_logger_get_id(struct logger *logger)
     int android_logger_clear(struct logger *logger)
     int android_logger_get_log_size(struct logger *logger)
@@ -105,7 +103,7 @@ Main, System, Radio and Events sub-logs.
 
 The logging interfaces are a series of macros, all of which can be overridden individually in order
 to control the verbosity of the application or library.  `[ASR]LOG[VDIWE]` calls are used to log to
-BAsic, System or Radio sub-logs in either the Verbose, Debug, Info, Warning or Error priorities.
+Basic, System or Radio sub-logs in either the Verbose, Debug, Info, Warning or Error priorities.
 `[ASR]LOG[VDIWE]_IF` calls are used to perform thus based on a condition being true.
 `IF_ALOG[VDIWE]` calls are true if the current `LOG_TAG` is enabled at the specified priority.
 `LOG_ALWAYS_FATAL` is used to `ALOG` a message, then kill the process.  `LOG_FATAL` call is a
@@ -118,10 +116,9 @@ at a time in time sorted order, optionally limited to a specific pid and tail of
 finally a call closing the logs.  A single log can be opened with `android_logger_list_open()`; or
 multiple logs can be opened with `android_logger_list_alloc()`, calling in turn the
 `android_logger_open()` for each log id.  Each entry can be retrieved with
-`android_logger_list_read()`.  The log(s) can be closed with `android_logger_list_free()`.  The logs
-should be opened with an `ANDROID_LOG_RDONLY` mode.  `ANDROID_LOG_NONBLOCK` mode will report when
-the log reading is done with an `EAGAIN` error return code, otherwise the
-`android_logger_list_read()` call will block for new entries.
+`android_logger_list_read()`.  The log(s) can be closed with `android_logger_list_free()`.
+`ANDROID_LOG_NONBLOCK` mode will report when the log reading is done with an `EAGAIN` error return
+code, otherwise the `android_logger_list_read()` call will block for new entries.
 
 The `ANDROID_LOG_WRAP` mode flag to the `android_logger_list_alloc_time()` signals logd to quiesce
 the reader until the buffer is about to prune at the start time then proceed to dumping content.
@@ -130,14 +127,12 @@ The `ANDROID_LOG_PSTORE` mode flag to the `android_logger_open()` is used to swi
 logs to the persistent logs from before the last reboot.
 
 The value returned by `android_logger_open()` can be used as a parameter to the
-`android_logger_clear()` function to empty the sub-log.  It is recommended to only open log
-`ANDROID_LOG_WRONLY` in that case.
+`android_logger_clear()` function to empty the sub-log.
 
 The value returned by `android_logger_open()` can be used as a parameter to the
 `android_logger_get_log_(size|readable_size|version)` to retrieve the sub-log maximum size, readable
 size and log buffer format protocol version respectively.  `android_logger_get_id()` returns the id
-that was used when opening the sub-log.  It is recommended to open the log `ANDROID_LOG_RDONLY` in
-these cases.
+that was used when opening the sub-log.
 
 Errors
 ------
@@ -150,7 +145,7 @@ The `-EBADF` return code indicates that the log access point can not be opened, 
 is out of range.
 
 For the `-EAGAIN` return code, this means that the logging message was temporarily backed-up either
-because of Denial Of Service (DOS) logging pressure from some chatty application or service in the
+because of Denial Of Service (DOS) logging pressure from some spammy application or service in the
 Android system, or if too small of a value is set in /proc/sys/net/unix/max_dgram_qlen.  To aid in
 diagnosing the occurence of this, a binary event from liblog will be sent to the log daemon once a
 new message can get through indicating how many messages were dropped as a result.  Please take

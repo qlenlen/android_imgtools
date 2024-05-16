@@ -28,13 +28,14 @@
 #include <log/log_read.h>
 #include <log/log_time.h>
 
+#include "test_utils.h"
+
 #ifdef __ANDROID__
 static void read_with_wrap() {
   // Read the last line in the log to get a starting timestamp. We're assuming
   // the log is not empty.
-  const int mode = ANDROID_LOG_RDONLY | ANDROID_LOG_NONBLOCK;
-  struct logger_list* logger_list =
-      android_logger_list_open(LOG_ID_MAIN, mode, 1000, 0);
+  const int mode = ANDROID_LOG_NONBLOCK;
+  struct logger_list* logger_list = android_logger_list_open(LOG_ID_SYSTEM, mode, 1000, 0);
 
   ASSERT_NE(logger_list, nullptr);
 
@@ -49,8 +50,7 @@ static void read_with_wrap() {
   logger_list =
       android_logger_list_alloc_time(mode | ANDROID_LOG_WRAP, start, 0);
   ASSERT_NE(logger_list, nullptr);
-
-  struct logger* logger = android_logger_open(logger_list, LOG_ID_MAIN);
+  struct logger* logger = android_logger_open(logger_list, LOG_ID_SYSTEM);
   EXPECT_NE(logger, nullptr);
   if (logger) {
     android_logger_list_read(logger_list, &log_msg);
@@ -70,7 +70,7 @@ TEST(liblog, wrap_mode_blocks) {
   struct sigaction ignore = {.sa_handler = [](int) { _exit(0); }};
   struct sigaction old_sigaction;
   sigaction(SIGALRM, &ignore, &old_sigaction);
-  alarm(5);
+  alarm(getAlarmSeconds(5));
 
   android::base::Timer timer;
   read_with_wrap();

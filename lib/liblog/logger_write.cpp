@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#define _POSIX_THREAD_SAFE_FUNCTIONS  // For mingw localtime_r().
+
 #include "logger_write.h"
 
 #include <errno.h>
@@ -52,6 +54,14 @@
 #include <windows.h>
 #endif
 
+// The preferred way to access system properties is using android::base::GetProperty in libbase.
+// However, adding dependency to libbase requires that if liblog was statically linked to a client,
+// that client now has additional dependency to libbase as well because static dependencies of
+// static library is not exported. (users of liblog.so however is fine).
+#ifdef __ANDROID__
+#include <sys/system_properties.h>
+#endif
+
 using android::base::ErrnoRestorer;
 
 #define LOG_BUF_SIZE 1024
@@ -60,7 +70,7 @@ using android::base::ErrnoRestorer;
 static int check_log_uid_permissions() {
   uid_t uid = getuid();
 
-  /* Matches clientHasLogCredentials() in logd */
+  /* Matches clientCanWriteSecurityLog() in logd */
   if ((uid != AID_SYSTEM) && (uid != AID_ROOT) && (uid != AID_LOG)) {
     uid = geteuid();
     if ((uid != AID_SYSTEM) && (uid != AID_ROOT) && (uid != AID_LOG)) {
@@ -81,7 +91,8 @@ static int check_log_uid_permissions() {
           }
           num_groups = getgroups(num_groups, groups);
           while (num_groups > 0) {
-            if (groups[num_groups - 1] == AID_LOG) {
+            if (groups[num_groups - 1] == AID_LOG ||
+                groups[num_groups - 1] == AID_SECURITY_LOG_WRITER) {
               break;
             }
             --num_groups;
@@ -108,11 +119,10 @@ void __android_log_close() {
 #endif
 }
 
-#if defined(__GLIBC__) || defined(_WIN32)
+// BSD-based systems like Android/macOS have getprogname(). Others need us to provide one.
+#if !defined(__APPLE__) && !defined(__BIONIC__)
 static const char* getprogname() {
-#if defined(__GLIBC__)
-  return program_invocation_short_name;
-#elif defined(_WIN32)
+#ifdef _WIN32
   static bool first = true;
   static char progname[MAX_PATH] = {};
 
@@ -129,16 +139,18 @@ static const char* getprogname() {
   }
 
   return progname;
+#else
+  return program_invocation_short_name;
 #endif
 }
 #endif
 
 // It's possible for logging to happen during static initialization before our globals are
 // initialized, so we place this std::string in a function such that it is initialized on the first
-// call.
+// call. We use a pointer to avoid exit time destructors.
 std::string& GetDefaultTag() {
-  static std::string default_tag = getprogname();
-  return default_tag;
+  static std::string* default_tag = new std::string(getprogname());
+  return *default_tag;
 }
 
 void __android_log_set_default_tag(const char* tag) {
@@ -192,7 +204,7 @@ static int write_to_log(log_id_t log_id, struct iovec* vec, size_t nr) {
     return -EINVAL;
   }
 
-  clock_gettime(android_log_clockid(), &ts);
+  clock_gettime(CLOCK_REALTIME, &ts);
 
   if (log_id == LOG_ID_SECURITY) {
     if (vec[0].iov_len < 4) {
@@ -241,18 +253,16 @@ static uint64_t GetThreadId() {
 #endif
 }
 
-void __android_log_stderr_logger(const struct __android_log_message* log_message) {
+static void filestream_logger(const struct __android_log_message* log_message, FILE* stream) {
+  struct timespec ts;
+  clock_gettime(CLOCK_REALTIME, &ts);
+
   struct tm now;
-  time_t t = time(nullptr);
+  localtime_r(&ts.tv_sec, &now);
 
-#if defined(_WIN32)
-  localtime_s(&now, &t);
-#else
-  localtime_r(&t, &now);
-#endif
-
-  char timestamp[32];
-  strftime(timestamp, sizeof(timestamp), "%m-%d %H:%M:%S", &now);
+  char timestamp[sizeof("mm-DD HH::MM::SS.mmm\0")];
+  size_t n = strftime(timestamp, sizeof(timestamp), "%m-%d %H:%M:%S", &now);
+  snprintf(timestamp + n, sizeof(timestamp) - n, ".%03ld", ts.tv_nsec / (1000 * 1000));
 
   static const char log_characters[] = "XXVDIWEF";
   static_assert(arraysize(log_characters) - 1 == ANDROID_LOG_SILENT,
@@ -261,19 +271,70 @@ void __android_log_stderr_logger(const struct __android_log_message* log_message
       log_message->priority > ANDROID_LOG_SILENT ? ANDROID_LOG_FATAL : log_message->priority;
   char priority_char = log_characters[priority];
   uint64_t tid = GetThreadId();
+  const char* tag = log_message->tag ? log_message->tag : " nullptr";
 
   if (log_message->file != nullptr) {
-    fprintf(stderr, "%s %c %s %5d %5" PRIu64 " %s:%u] %s\n",
-            log_message->tag ? log_message->tag : "nullptr", priority_char, timestamp, getpid(),
-            tid, log_message->file, log_message->line, log_message->message);
+    fprintf(stream, "%s %5d %5" PRIu64 " %c %-8s: %s:%u %s\n", timestamp, getpid(), tid,
+            priority_char, tag, log_message->file, log_message->line, log_message->message);
   } else {
-    fprintf(stderr, "%s %c %s %5d %5" PRIu64 " %s\n",
-            log_message->tag ? log_message->tag : "nullptr", priority_char, timestamp, getpid(),
-            tid, log_message->message);
+    fprintf(stream, "%s %5d %5" PRIu64 " %c %-8s: %s\n", timestamp, getpid(), tid, priority_char,
+            tag, log_message->message);
   }
 }
 
+static const char* get_file_logger_path() {
+#ifdef __ANDROID__
+  static const char* file_logger_path = []() {
+    static char path[PROP_VALUE_MAX] = {};
+    if (__system_property_get("ro.log.file_logger.path", path) > 0) {
+      return path;
+    }
+    return static_cast<char*>(nullptr);  // means file_logger should not be used
+  }();
+  return file_logger_path;
+#else
+  return nullptr;
+#endif
+}
+
+/*
+ * If ro.log.file_logger.path is set to a file, send log_message to the file instead. This is for
+ * Android-like environments where logd is not available; e.g. Microdroid. If the file is not
+ * accessible (but ro.log.file_logger.path is set anyway), stderr is chosen as the fallback.
+ *
+ * Returns true if log was sent to file. false, if not.
+ */
+static bool log_to_file_if_overridden(const struct __android_log_message* log_message) {
+  const char* file_logger_path = get_file_logger_path();
+  if (file_logger_path == nullptr) return false;
+
+  static FILE* stream = [&file_logger_path]() {
+    FILE* f = fopen(file_logger_path, "ae");
+    if (f != nullptr) return f;
+    using namespace std::string_literals;
+    std::string err_msg = "Cannot open "s + file_logger_path + " for logging: (" + strerror(errno) +
+                          "). Falling back to stderr";
+    __android_log_message m = {sizeof(__android_log_message),
+                               LOG_ID_DEFAULT,
+                               ANDROID_LOG_WARN,
+                               "liblog",
+                               __FILE__,
+                               __LINE__,
+                               err_msg.c_str()};
+    filestream_logger(&m, stderr);
+    return stderr;
+  }();
+  filestream_logger(log_message, stream);
+  return true;
+}
+
+void __android_log_stderr_logger(const struct __android_log_message* log_message) {
+  filestream_logger(log_message, stderr);
+}
+
 void __android_log_logd_logger(const struct __android_log_message* log_message) {
+  if (log_to_file_if_overridden(log_message)) return;
+
   int buffer_id = log_message->buffer_id == LOG_ID_DEFAULT ? LOG_ID_MAIN : log_message->buffer_id;
 
   struct iovec vec[3];
@@ -334,7 +395,7 @@ int __android_log_vprint(int prio, const char* tag, const char* fmt, va_list ap)
     return -EPERM;
   }
 
-  char buf[LOG_BUF_SIZE];
+  __attribute__((uninitialized)) char buf[LOG_BUF_SIZE];
 
   vsnprintf(buf, LOG_BUF_SIZE, fmt, ap);
 
@@ -352,7 +413,7 @@ int __android_log_print(int prio, const char* tag, const char* fmt, ...) {
   }
 
   va_list ap;
-  char buf[LOG_BUF_SIZE];
+  __attribute__((uninitialized)) char buf[LOG_BUF_SIZE];
 
   va_start(ap, fmt);
   vsnprintf(buf, LOG_BUF_SIZE, fmt, ap);
@@ -372,7 +433,7 @@ int __android_log_buf_print(int bufID, int prio, const char* tag, const char* fm
   }
 
   va_list ap;
-  char buf[LOG_BUF_SIZE];
+  __attribute__((uninitialized)) char buf[LOG_BUF_SIZE];
 
   va_start(ap, fmt);
   vsnprintf(buf, LOG_BUF_SIZE, fmt, ap);
@@ -385,7 +446,7 @@ int __android_log_buf_print(int bufID, int prio, const char* tag, const char* fm
 }
 
 void __android_log_assert(const char* cond, const char* tag, const char* fmt, ...) {
-  char buf[LOG_BUF_SIZE];
+  __attribute__((uninitialized)) char buf[LOG_BUF_SIZE];
 
   if (fmt) {
     va_list ap;
