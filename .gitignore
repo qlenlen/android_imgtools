@@ -1,4 +1,4 @@
 bin/*
 lib/lib/*
-
+*.o
 .vscode/settings.json

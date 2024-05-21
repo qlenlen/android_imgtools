@@ -2,6 +2,7 @@
 set -x -e
 
 rm -rf lib/lib
+rm -rf bin
 mkdir -p lib/lib bin
 
 CC=clang
@@ -567,6 +568,15 @@ cd ../libjsonpb
 $CC -std=c++17 -I../include -Iparse/include ${CFLAGS} -c parse/jsonpb.cpp
 $AR rcs ../lib/libjsonpbparse.a *.o
 rm -r *.o
+
+echo "ASSEMBLE simg2img"
+cd ../libsparse
+${CPP} -std=c++17 -I../include ${CFLAGS} -D_FILE_OFFSET_BITS=64 -o ../../bin/simg2img simg2img.cpp ../lib/libsparse.a ../lib/libz.a ../lib/libbase.a -lpthread ${LDFLAGS}
+
+${CPP} -std=c++17 -I../include ${CFLAGS} -D_FILE_OFFSET_BITS=64 -o ../../bin/img2simg img2simg.cpp ../lib/libsparse.a ../lib/libz.a ../lib/libbase.a -lpthread ${LDFLAGS}
+
+$STRIP ../../bin/simg2img
+$STRIP ../../bin/img2simg
 
 echo "BUILD partition_tools"
 cd ../../partition_tools
