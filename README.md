@@ -3,4 +3,6 @@
 build under ubuntu :
 ./make.sh
 
+result in "bin" directory
+
 source code from aosp
